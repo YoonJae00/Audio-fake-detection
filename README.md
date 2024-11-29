@@ -96,6 +96,12 @@ class DeepFakeDetector(nn.Module):
 
 ### 5. 성능 평가
 
+![image](https://github.com/user-attachments/assets/5b67a4e6-2770-4446-9735-a2f00a801a09)
+
+
+![image](https://github.com/user-attachments/assets/7902834e-68d0-4ca1-8fd2-06223b275bac)
+
+
 ```83:104:main.py
         if (epoch + 1) % 1 == 0:
             model.eval()
