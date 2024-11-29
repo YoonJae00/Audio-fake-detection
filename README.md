@@ -1,100 +1,92 @@
-# 딥러닝 기반 오디오 딥페이크 탐지 시스템
+
+
+# 시계열 기반 오디오 딥페이크 탐지 시스템
 
 ## 프로젝트 개요
-이 프로젝트는 오디오 파일의 특성(feature)을 분석하여 진짜와 가짜(딥페이크) 오디오를 구분하는 딥러닝 모델을 구현했습니다.
+이 프로젝트는 LSTM(Long Short-Term Memory) 네트워크를 사용하여 오디오의 시계열 특성을 분석하고, 진짜와 가짜(딥페이크) 오디오를 구분하는 딥러닝 모델을 구현했습니다.
 
 ## 데이터셋
-- 데이터셋은 진짜 오디오와 가짜 오디오의 특성이 추출된 CSV 파일을 사용
-- 각 오디오 파일당 26개의 특성값 포함
-- 테스트 데이터셋만 사용하여 모델 학습 및 평가 진행
+- 오디오 파일의 26개 특성이 추출된 CSV 파일 사용
+- 각 특성의 시계열 패턴을 분석하여 분류 수행
+- 테스트 데이터셋을 사용하여 모델 학습 및 평가
 
 ## 구현 내용
 
-### 1. 데이터 전처리
+### 1. 시계열 데이터 전처리
 
-```40:47:main.py
+```python
+class AudioFeatureDataset(Dataset):
+    def __init__(self, features, labels, sequence_length=10):
+        self.sequence_length = sequence_length
+        self.sequences = []
+        self.labels = []
+        
+        for i in range(len(features) - sequence_length + 1):
+            self.sequences.append(features[i:i + sequence_length])
+            self.labels.append(labels[i])
+```
+
+- 연속된 특성값들을 시퀀스로 구성
+- 시퀀스 길이(sequence_length) 파라미터로 조절 가능
+- 슬라이딩 윈도우 방식으로 시계열 데이터 생성
+
+### 2. LSTM 기반 모델 구조
+
+```python
+class DeepFakeDetector(nn.Module):
+    def __init__(self, input_size=26, hidden_size=64, num_layers=2, sequence_length=10):
+        self.lstm = nn.LSTM(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            batch_first=True,
+            dropout=0.3
+        )
+        
+        self.fc = nn.Sequential(
+            nn.Linear(hidden_size * sequence_length, 64),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(64, 2)
+        )
+```
+
+#### 모델 구조:
+1. **LSTM 레이어**
+   - 입력 크기: 26 (특성 수)
+   - 은닉층 크기: 64
+   - 레이어 수: 2
+   - 드롭아웃: 0.3
+
+2. **완전연결층**
+   - LSTM 출력을 평탄화
+   - 64 유닛의 은닉층
+   - 드롭아웃: 0.2
+   - 2개의 출력 클래스 (진짜/가짜)
+
+### 3. 학습 프로세스
+
+```python
+def train_model(csv_path, epochs=10, batch_size=32, sequence_length=10):
+    # 데이터 로딩 및 전처리
     df = pd.read_csv(csv_path)
-    
-    # test 데이터만 필터링
     df = df[df['split'] == 'testing']
     
     # 특성과 레이블 분리
-    features = df.iloc[:, 4:].values  # 0-25 특성
+    features = df.iloc[:, 4:].values
     labels = (df['label'] == 'real').astype(int).values
 ```
 
-- CSV 파일에서 테스트 데이터만 필터링
-- 26개의 특성값을 입력 데이터로 사용
-- 레이블은 'real'(1)과 'fake'(0)로 이진 분류
-
-### 2. 데이터셋 클래스 구현
-
-```10:19:main.py
-class AudioFeatureDataset(Dataset):
-    def __init__(self, features, labels):
-        self.features = torch.FloatTensor(features)
-        self.labels = torch.LongTensor(labels)
-    
-    def __len__(self):
-        return len(self.labels)
-    
-    def __getitem__(self, idx):
-        return self.features[idx], self.labels[idx]
-```
-
-- PyTorch의 Dataset 클래스를 상속하여 커스텀 데이터셋 구현
-- 특성값을 FloatTensor로, 레이블을 LongTensor로 변환
-- `__getitem__` 메소드로 개별 데이터 접근 가능
-
-### 3. 딥러닝 모델 구조
-
-```22:36:main.py
-class DeepFakeDetector(nn.Module):
-    def __init__(self, input_size=26):
-        super(DeepFakeDetector, self).__init__()
-        self.model = nn.Sequential(
-            nn.Linear(input_size, 64),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(32, 2)
-        )
-    
-    def forward(self, x):
-        return self.model(x)
-```
-
-- 3개의 선형 레이어로 구성된 신경망
-- 입력층(26) → 은닉층1(64) → 은닉층2(32) → 출력층(2)
-- ReLU 활성화 함수와 드롭아웃 레이어 사용
-- 과적합 방지를 위한 드롭아웃 비율: 0.3, 0.2
-
-### 4. 학습 프로세스
-
-```68:80:main.py
-    for epoch in range(epochs):
-        model.train()
-        total_loss = 0
-        for features, labels in train_loader:
-            features, labels = features.to(device), labels.to(device)
-            
-            optimizer.zero_grad()
-            outputs = model(features)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
-            
-            total_loss += loss.item()
-```
-
 - CrossEntropyLoss 손실 함수 사용
-- Adam 옵티마이저로 모델 파라미터 최적화
-- 미니배치 단위로 학습 진행
-- GPU 가속 지원 (CUDA 사용 가능 시)
+- Adam 옵티마이저로 최적화
+- 미니배치 학습
+- GPU 가속 지원
 
-### 5. 성능 평가
+### 4. 성능 평가 지표
+- 정확도 (Accuracy)
+- 정밀도 (Precision)
+- 재현율 (Recall)
+- F1 점수
 
 ![image](https://github.com/user-attachments/assets/5b67a4e6-2770-4446-9735-a2f00a801a09)
 
@@ -102,39 +94,8 @@ class DeepFakeDetector(nn.Module):
 ![image](https://github.com/user-attachments/assets/7902834e-68d0-4ca1-8fd2-06223b275bac)
 
 
-```83:104:main.py
-        if (epoch + 1) % 1 == 0:
-            model.eval()
-            all_preds = []
-            all_labels = []
-            
-            with torch.no_grad():
-                for features, labels in test_loader:
-                    features, labels = features.to(device), labels.to(device)
-                    outputs = model(features)
-                    _, predicted = torch.max(outputs.data, 1)
-                    all_preds.extend(predicted.cpu().numpy())
-                    all_labels.extend(labels.cpu().numpy())
-            
-            accuracy = accuracy_score(all_labels, all_preds)
-            precision, recall, f1, _ = precision_recall_fscore_support(all_labels, all_preds, average='binary')
-            
-            print(f'\n에포크 {epoch + 1}/{epochs}:')
-            print(f'손실: {total_loss/len(train_loader):.4f}')
-            print(f'정확도: {accuracy:.4f}')
-            print(f'정밀도: {precision:.4f}')
-            print(f'재현율: {recall:.4f}')
-            print(f'F1 점수: {f1:.4f}')
-```
+## 설치 및 실행 방법
 
-- 매 에포크마다 모델 성능 평가
-- 평가 지표:
-  - 정확도 (Accuracy)
-  - 정밀도 (Precision)
-  - 재현율 (Recall)
-  - F1 점수
-
-## 사용 방법
 1. 필요한 패키지 설치:
 ```bash
 pip install torch pandas scikit-learn numpy
@@ -145,6 +106,11 @@ pip install torch pandas scikit-learn numpy
 python main.py
 ```
 
+3. 시퀀스 길이 조정:
+```python
+model = train_model(csv_path, sequence_length=15)  # 기본값: 10
+```
+
 ## 기술 스택
 - Python 3.12
 - PyTorch
@@ -152,9 +118,24 @@ python main.py
 - scikit-learn
 - numpy
 
+## 주요 특징
+- LSTM을 활용한 시계열 패턴 학습
+- 가변적인 시퀀스 길이 설정 가능
+- 다층 LSTM 구조로 복잡한 패턴 포착
+- 드롭아웃을 통한 과적합 방지
+
 ## 향후 개선 사항
-- 모델 아키텍처 최적화
-- 하이퍼파라미터 튜닝
+- 양방향 LSTM (Bidirectional LSTM) 적용
+- 어텐션 메커니즘 도입
+- 시퀀스 길이 최적화
 - 데이터 증강 기법 적용
-- 모델 저장 및 로드 기능 추가
-- 실시간 오디오 분석 기능 구현
+- 모델 저장 및 로드 기능
+- 실시간 오디오 분석 기능
+
+## 참고 사항
+- 시퀀스 길이가 길수록 더 많은 컨텍스트를 고려할 수 있지만, 메모리 사용량이 증가합니다.
+- GPU 메모리 한계를 고려하여 배치 크기와 시퀀스 길이를 조절하세요.
+- 테스트 데이터만 사용하므로, 전체 데이터셋으로 확장하여 성능을 개선할 수 있습니다.
+
+## 라이센스
+이 프로젝트는 MIT 라이센스를 따릅니다.
